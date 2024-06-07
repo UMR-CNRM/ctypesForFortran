@@ -168,6 +168,7 @@ def ctypesForFortranFactory(solib):
 
     Usage:
         Fortran code:
+<<BEGIN FORTRAN
             FUNCTION F_INT(KIN)
               IMPLICIT NONE
               INTEGER(KIND=8), INTENT(IN) :: KIN
@@ -267,6 +268,7 @@ def ctypesForFortranFactory(solib):
               KAOUT2(3,:)=KAIN2(3,:)
               KAOUT2(4,:)=-KAIN2(4,:)
             END SUBROUTINE
+>>END FORTRAN
           compiled to create foo.so shared library (ex with gfortran:
           "gfortran -c -fPIC foo.F90 && gfortran -shared -g -o foo.so foo.o",
           or with ifort:
@@ -274,6 +276,7 @@ def ctypesForFortranFactory(solib):
           )
 
         Python code:
+<<BEGIN PYTHON
             import numpy
             import ctypesForFortran
 
@@ -449,7 +452,7 @@ def ctypesForFortranFactory(solib):
                     #It is normal for call to raise an error
                     pass
             ctypesForFortran.dlclose(handle)
-
+>>END PYTHON
           if OK must execute without any output
     """
     import six
@@ -1088,7 +1091,7 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
             result += ((prefix % module_name) if '%s' in prefix else prefix) + "', '"
             result += ((suffix % module_name) if '%s' in suffix else suffix) + "')\n"
         result += "\n\n"
-        result += "ctypesFF = ctypesForFortran.ctypesForFortranFactory('" + solib + "')\n\n"
+        result += "ctypesFF, handle = ctypesForFortran.ctypesForFortranFactory('" + solib + "')\n\n"
         for obj in objs:
             result += "@ctypesFF(*pre_suf['" + obj['module'] + "'])\n"
             result += "def " + obj['name'] + "(" + ', '.join(obj['in_var_names']) + "):\n"

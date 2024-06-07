@@ -41,3 +41,6 @@ pylint_global.txt
 *.x
 *.so
 
+# vi swap files
+*.swp
+
