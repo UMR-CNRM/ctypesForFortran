@@ -24,7 +24,7 @@ from _ctypes import dlclose
 
 __all__ = []
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 __license__ = 'CeCILL-C'
 

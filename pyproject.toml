@@ -32,6 +32,7 @@ classifiers = [
 
 requires-python = ">=3.6"
 dependencies=[
+    "numpy",
             ]
 [tool.setuptools]
 include-package-data = true
