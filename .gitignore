@@ -1,0 +1,43 @@
+*.py[co~]
+
+# Packages
+*.egg
+*.egg-info
+dist
+build
+eggs
+parts
+var
+sdist
+develop-eggs
+.installed.cfg
+
+# Installer logs
+pip-log.txt
+
+# Unit test / coverage reports
+coverage_report
+.coverage
+.tox
+
+# metrics reports
+flake8_report.txt
+pylint_global.txt
+
+# Translations
+*.mo
+
+# Mr Developer
+.mr.developer.cfg
+
+# Eclipse unwanted files
+.settings
+.project
+.pydevproject
+.idea
+
+# compiled inner libraries
+*.o
+*.x
+*.so
+

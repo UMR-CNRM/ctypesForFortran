@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ctypesForFortran"
+dynamic = ["version"]
+description = "Bindings to Fortran subroutines using ctypes"
+authors = [
+    { name = "Sébastien Riette"  , email = "sebastien.riette@meteo.fr"}
+]
+maintainers = [
+  { name = "Sébastien Riette"  , email = "sebastien.riette@meteo.fr"}
+]
+
+license = {file = "LICENSE.txt"}
+
+classifiers = [
+    'Development Status :: 5 - Production/Stable',
+    'Intended Audience :: Science/Research',
+    'Intended Audience :: Developers',
+    'Programming Language :: Python',
+    'Programming Language :: Python :: 3.6',
+    'Programming Language :: Python :: 3.7',
+    'Programming Language :: Python :: 3.8',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+    'Operating System :: Unix',
+]
+
+
+requires-python = ">=3.6"
+dependencies=[
+            ]
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "ctypesForFortran.__version__"}
+
+[project.urls]
+source = "https://github.com/UMR-CNRM/ctypesForFortran.git"
+tracker = "https://github.com/UMR-CNRM/ctypesForFortran/issues"
+
