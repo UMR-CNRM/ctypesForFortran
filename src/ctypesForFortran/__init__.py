@@ -119,9 +119,10 @@ def ctypesForFortranFactory(solib):
     This function returns a tuple (function, handle). The handle can be used with dlclose.
 
     The returned function will return a decorator used to call fortran routines or functions
-    contained in <solib> using ctypes. The function can take up to two arguments:
-    prefix and suffix which will be added to the python function name to build the name
-    of the function in the shared library. By default prefix is the empty string whereas suffix is '_'.
+    contained in <solib> using ctypes. The function can take up to three arguments:
+      - prefix and suffix which will be added to the python function name to build the name
+        of the function in the shared library. By default prefix is the empty string whereas suffix is '_'.
+      - if castInput is True, input values are cast into the right dtype before being used.
 
     The actual python function that must be decorated must return the signature of the fortran routine.
     The signature is a tuple. Fisrt element is the actual list of arguments which will be used to call
@@ -155,9 +156,10 @@ def ctypesForFortranFactory(solib):
                      strings arrays are declared (in signature) with str but must be
                      created with the 'S' dtype with python3 (str is OK with python2)
 
-    Note on inout arrays: there is only one version of the array (if `a' is an array declared
-                          in inout "foo(a)" will return `a' with new values (except for bool
-                          arrays in some circumstances)
+    Note on inout arrays: if a subroutine takes array arguments with the INOUT intent, the input array
+                          may be, or not, the same object as the returned array. In the following example
+                          "new_a = FOO(a)" if the subroutine argument has the INOUT intent, 'a' and 'new_a'
+                          not guaranteed to be the same object, but can be.
 
     Known limitations:
       - only some types have been tested, other raise an exception but this
@@ -482,12 +484,15 @@ def ctypesForFortranFactory(solib):
     true, false = {'ifort': (-1, 0),
                    'gfortran': (1, 0)}[compiler.pop()]
 
-    def ctypesFF(prefix="", suffix="_"):
+    def ctypesFF(prefix="", suffix="_", castInput=False):
         """
         This function returns the decorator to use.
         prefix (resp. suffix) is the string that we must put before (resp. after)
         the python function name to build the name of the function contained
         in the shared library.
+
+        If castInput is True, input values are cast into the right dtype before
+        being used.
 
         Please refer to ctypesForFortranFactory for a complete documentation.
         """
@@ -588,7 +593,7 @@ def ctypesForFortranFactory(solib):
                                 raise NotImplementedError("This scalar type is not (yet?) implemented")
                             argtypes.append(ctypes.POINTER(cl))
                             if s[2] in [IN, INOUT]:
-                                argument = cl(sorted_args[iargIN])
+                                argument = cl(s[0](sorted_args[iargIN]) if castInput else sorted_args[iargIN])
                                 iargIN += 1
                             else:
                                 argument = cl()
@@ -610,7 +615,7 @@ def ctypesForFortranFactory(solib):
                                     effective_dtype = expected_dtype
                                 expected_shape = s[1]
                             if s[2] in [IN, INOUT]:
-                                argument = sorted_args[iargIN]
+                                argument = sorted_args[iargIN].astype(effective_dtype) if castInput else sorted_args[iargIN]
                                 iargIN += 1
                                 if not isinstance(argument, numpy.ndarray):
                                     raise ValueError("Arrays must be numpy.ndarrays (argument #{i})".format(i=iargIN - 1))
