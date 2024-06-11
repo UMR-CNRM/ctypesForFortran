@@ -14,11 +14,13 @@ The module also exposes a dlclose function to try closing lib
 
 from __future__ import print_function, absolute_import, unicode_literals, division
 
-import ctypes
-import numpy
 import subprocess
 import os
 import re
+import ctypes
+from functools import wraps
+import six
+import numpy
 
 from _ctypes import dlclose
 
@@ -41,11 +43,12 @@ MISSING = object()
 MANDATORY_AFTER_OPTIONAL = object()
 
 def addReturnCode(func):
-    def wrapper(*args, **kwargs):
-        """
-        This decorator adds an integer at the beginning of the "returned"
-        signature of the Python function.
-        """
+    """
+    This decorator adds an integer at the beginning of the "returned"
+    signature of the Python function.
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs): # pylint: disable=redefined-outer-name
         out = func(*args, **kwargs)
         out[1].insert(0, (numpy.int64, None, OUT))
         return out
@@ -55,15 +58,16 @@ def addReturnCode(func):
 
 
 def treatReturnCode(func):
-    def wrapper(*args):
-        """
-        This decorator raises a Python error if the integer returned by
-        addReturnCode is different from 0.
-        """
+    """
+    This decorator raises a Python error if the integer returned by
+    addReturnCode is different from 0.
+    """
+    @wraps(func)
+    def wrapper(*args): # pylint: disable=redefined-outer-name
         result = func(*args)
         try:
             nout = len(result)
-        except Exception:
+        except TypeError:
             nout = 1
         if nout == 1:
             result = (result,)
@@ -85,11 +89,10 @@ def get_dynamic_libs(obj):
     libs = {}
     osname = str(os.uname()[0])
     if osname == 'Linux':
-        _re = re.compile('((?P<libname>lib.*) => )?(?P<libpath>/.*/.*\.so(\.\d+)?)\s\\(0x.*\)')
-        ldd_out = [line.decode().strip() for line in
-                     subprocess.Popen(['ldd', obj],
-                                      stdout=subprocess.PIPE,
-                                      stderr=subprocess.PIPE).stdout.readlines()]
+        _re = re.compile(r'((?P<libname>lib.*) => )?(?P<libpath>/.*/.*\.so(\.\d+)?)\s\(0x.*\)')
+        with subprocess.Popen(['ldd', obj], stdout=subprocess.PIPE,
+                                            stderr=subprocess.PIPE) as proc:
+            ldd_out = [line.decode().strip() for line in proc.stdout.readlines()]
         for line in ldd_out:
             match = _re.match(line)
             if match:
@@ -98,11 +101,10 @@ def get_dynamic_libs(obj):
                     matchdict['libname'] = matchdict.get('libpath').split('/')[-1]
                 libs[matchdict['libname']] = matchdict.get('libpath')
     elif osname == 'Darwin':
-        _re = re.compile('\s*(?P<libdir>/.*/)(?P<libname>.*(\.\d+)?\.dylib)\s+.*')
-        otool_out = [line.decode().strip() for line in
-                     subprocess.Popen(['otool', '-L', obj],
-                                      stdout=subprocess.PIPE,
-                                      stderr=subprocess.PIPE).stdout.readlines()]
+        _re = re.compile(r'\s*(?P<libdir>/.*/)(?P<libname>.*(\.\d+)?\.dylib)\s+.*')
+        with subprocess.Popen(['otool', '-L', obj], stdout=subprocess.PIPE,
+                                                    stderr=subprocess.PIPE) as proc:
+            otool_out = [line.decode().strip() for line in proc.stdout.readlines()]
         for line in otool_out:
             match = _re.match(line)
             if match:
@@ -128,9 +130,9 @@ def ctypesForFortranFactory(solib):
         can be passed directly to and from the FORTRAN routine). If 'F' (default), array index order
         is the same as in the FORTRAN routine (arrays are automatically transposed).
 
-    The actual python function that must be decorated must return the signature of the fortran routine.
-    The signature is a tuple. Fisrt element is the actual list of arguments which will be used to call
-    the fortran routine.
+    The actual python function that is decorated must return the signature of the fortran routine.
+    The signature is a tuple. Fisrt element is the actual list of arguments which will be used
+    to call the fortran routine.
     The arguments must be put in the same order as the one declared in the fortran routine.
     With BIND(C) subroutine, optional arguments can be set to MISSING.
     The second element of the signature tuple is also a list, each element of the list is
@@ -148,33 +150,35 @@ def ctypesForFortranFactory(solib):
     without the in_out_intent element. None must be used for subroutine.
 
     For input arguments, type checking is done against this signature.
-    All elements must be declared using numpy classes but scalars are expected to be true
-    python scalars (for instance (np.float64, None, IN) is the signature for a python float variable)
+    All elements must be declared using numpy classes except str and bool but scalar arguments
+    are expected to be true python scalars (for instance (np.float64, None, IN) is the signature
+    for a python float variable)
 
     The decorated function will call the fortran routine (or function) and return:
       - a tuple of all OUT and INOUT arguments (in the declaration order,
                                                 with function output in first position)
       - a single value if only one argument is OUT or INOUT
 
-    Note on strings: scalars strings are converted from and to unicode; it is certainly not totally wanted
+    Note on strings: scalars strings are converted from and to unicode; which isn't always wise
                      strings arrays are declared (in signature) with str but must be
                      created with the 'S' dtype with python3 (str is OK with python2)
 
-    Note on inout arrays: if a subroutine takes array arguments with the INOUT intent, the input array
-                          may be, or not, the same object as the returned array. In the following example
-                          "new_a = FOO(a)" if the subroutine argument has the INOUT intent, 'a' and 'new_a'
-                          not guaranteed to be the same object, but can be.
+    Note on inout arrays: if a subroutine takes array arguments with the INOUT intent, the input
+                          array may be, or not, the same object as the returned array. For example,
+                          if the argument 'a' in "new_a = FOO(a)" has the INOUT intent, 'a' and
+                          'new_a' are not guaranteed to be the same object, but can be.
 
     Known limitations:
       - only some types have been tested, other raise an exception but this
         could normally be extended easily
       - logical arrays must be declared with KIND=1 in the fortran routine
         as bool numpy array elements are 1 byte (and not 1 bit) values
-      - fortran assumed-shape arrays, assumed-rank arrays or asterisk length strings are not callable
-      - there is no support for optional fortran argument except if 'BIND(C)' is used in the FORTRAN code.
-        In this case missing argument must receive the MISSING value.
-        Note that, we can always use python optional arguments but the default python value (if not MISSING
-        will be passed to the fortran routine (it then will appear as present)
+      - fortran assumed-shape arrays, assumed-rank arrays or asterisk length strings are
+        not callable
+      - there is no support for optional fortran argument except if 'BIND(C)' is used in
+        the FORTRAN code. In this case missing argument must receive the MISSING value.
+        Note that, we can always use python optional arguments but the default python value
+        (if not MISSING will be passed to the fortran routine (it then will appear as present)
       - unicode/ASCCI issue is more than likely... (for scalars and string arrays)
       - only scalars (integer, real and logical) can be returned by functions
       - because integer value of boolean variables vary among compilers, we need to determine the
@@ -300,7 +304,9 @@ def ctypesForFortranFactory(solib):
 
             ctypesFF, handle = ctypesForFortran.ctypesForFortranFactory("./foo.so")
 
-            @ctypesFF() #With gfortran, if f_int was inside module 'toto', we would use @ctypesFF(prefix='__toto_MOD_', suffix='')
+            #With gfortran, if f_int was inside module 'toto', we would use
+            #@ctypesFF(prefix='__toto_M  OD_', suffix='')
+            @ctypesFF()
             def f_int(KIN):
                 return ([KIN],
                         [(numpy.int64, None, IN)], #INTEGER(KIND=8), INTENT(IN) :: KIN
@@ -435,27 +441,36 @@ def ctypesForFortranFactory(solib):
                    numpy.all(laout[10:20] == (numpy.logical_not(lain[10:20]))) and \
                    numpy.all(laout[20:30]==lain[20:30]) and \
                    numpy.all(laout[30:40] == (numpy.logical_not(lain[30:40]))), "l 3"
-            assert numpy.all(lainout == numpy.logical_not(numpy.array([True, False, False, False] * 10))), "l 4"
+            assert numpy.all(lainout == numpy.logical_not(numpy.array([True, False,
+                                                                       False, False] * 10))), "l 4"
 
-            assert numpy.all(kaout2[0, :]==kain2[0, :]) and numpy.all(kaout2[1, :]==-kain2[1, :]) and \
-                   numpy.all(kaout2[2, :]==kain2[2, :]) and numpy.all(kaout2[3, :]==-kain2[3, :]), "K 5"
+            assert numpy.all(kaout2[0, :]==kain2[0, :]) and \
+                   numpy.all(kaout2[1, :]==-kain2[1, :]) and \
+                   numpy.all(kaout2[2, :]==kain2[2, :]) and \
+                   numpy.all(kaout2[3, :]==-kain2[3, :]), "K 5"
 
             #Checks
             #Normal order args = [kin, kinout, pin, pinout, lin, linout, cdin, cdinout, cdain,
             #                     cdainout, kain, kainout, pain, painout, lain, lainout, kain2]
 
             for args in [[kin, kinout*1., pin, pinout, lin, linout, cdin, cdinout, cdain,
-                          cdainout, kain, kainout, pain, painout, lain, lainout, kain2], # wrong type for kinout
+                          cdainout, kain, kainout, pain, painout,
+                          lain, lainout, kain2], # wrong type for kinout
                          [kin, kinout, pin, pinout, lin, linout, cdin.ljust(500), cdinout, cdain,
-                          cdainout, kain, kainout, pain, painout, lain, lainout, kain2], # cdin string too long
+                          cdainout, kain, kainout, pain, painout, lain,
+                          lainout, kain2], # cdin string too long
                          [kin, kinout, pin, pinout, lin, linout, cdin, cdinout, cdain,
-                          cdainout, kain, kainout, pain, painout, lain, lainout, kain2.reshape((5, 4))], # wrong shape for kain2
+                          cdainout, kain, kainout, pain, painout,
+                          lain, lainout, kain2.reshape((5, 4))], # wrong shape for kain2
                          [kin, kinout, pin, pinout, lin, linout, cdin, cdinout, cdain,
-                          cdainout, kain*1., kainout, pain, painout, lain, lainout, kain2], # wrong type for kain array
+                          cdainout, kain*1., kainout, pain, painout,
+                          lain, lainout, kain2], # wrong type for kain array
                          [kin, kinout, pin, pinout, lin, linout, cdin, cdinout, cdain,
-                          cdainout, kain, kainout, pain, painout, lain.reshape((40, 1)), lainout, kain2], # wrong rank for lain
+                          cdainout, kain, kainout, pain, painout,
+                          lain.reshape((40, 1)), lainout, kain2], # wrong rank for lain
                          [kin, kinout, pin, pinout, lin, linout, cdin, cdinout, cdain,
-                          cdainout, list(kain), kainout, pain, painout, lain, lainout, kain2], # type not implemented for kain
+                          cdainout, list(kain), kainout, pain, painout,
+                          lain, lainout, kain2], # type not implemented for kain
                         ]:
                 try:
                     result = foo(*args)
@@ -469,13 +484,12 @@ def ctypesForFortranFactory(solib):
 >>END PYTHON
           if OK must execute without any output
     """
-    import six
     if isinstance(solib, six.string_types):
         filename = solib
         my_solib = ctypes.CDLL(solib, ctypes.RTLD_GLOBAL)
     else:
         my_solib = solib
-        filename = my_solib._name
+        filename = my_solib._name # pylint: disable=protected-access
     compiler = set()
     libs = get_dynamic_libs(filename)
     for lib in libs.keys():
@@ -521,125 +535,136 @@ def ctypesForFortranFactory(solib):
             def wrapper(*args, **kwargs):
                 sorted_args, signature, ret = func(*args, **kwargs)
                 assert isinstance(signature, list), "signature must be a list"
-                assert all([s is None or isinstance(s, tuple) for s in signature]), \
+                assert all(sig is None or isinstance(sig, tuple) for sig in signature), \
                     "all elements of the signature must be a tuple"
-                if not all([s[0] in [str, bool, numpy.int64,
-                                     numpy.float64, numpy.int32, numpy.float32,
-                                     MISSING] for s in signature]):
+                if not all(sig[0] in [str, bool, numpy.int64,
+                                    numpy.float64, numpy.int32, numpy.float32,
+                                    MISSING] for sig in signature):
                     raise NotImplementedError("This type is not (yet?) implemented")
-                assert all([s[1] is None or isinstance(s[1], tuple) for s in signature]), \
+                assert all(sig[1] is None or isinstance(sig[1], tuple) for sig in signature), \
                     "second element of argument signature must be None or a tuple"
-                assert all([len(s[1]) > 0 for s in signature if isinstance(s[1], tuple)]), \
+                assert all(len(sig[1]) > 0 for sig in signature if isinstance(sig[1], tuple)), \
                     "if second element of argument is a tuple, it must not be empty"
-                assert all([all([((isinstance(item, int) or
-                                   isinstance(item, numpy.int) or
-                                   isinstance(item, numpy.int64)) and
-                                  item >= 0) for item in s[1]])
-                            for s in signature if isinstance(s[1], tuple)]), \
+                assert all(all((isinstance(item, (int, numpy.int, numpy.int64)) and
+                                item >= 0) for item in sig[1])
+                            for sig in signature if isinstance(sig[1], tuple)), \
                     "if second element of argument is a tuple, it must contain " + \
                     "only positive or null integer values"
-                assert all([s[2] in [IN, INOUT, OUT] for s in signature]), \
+                assert all(sig[2] in [IN, INOUT, OUT] for sig in signature), \
                     "third element of argument signature must be IN, INOUT or OUT"
 
-                assert len(sorted_args) == len([s for s in signature if s[2] in [IN, INOUT]]), \
+                assert len(sorted_args) == len([sig for sig in signature
+                                                if sig[2] in [IN, INOUT]]), \
                     "Get " + str(len(sorted_args)) + " arguments, " + \
-                    str(len([s for s in signature if s[2] in [IN, INOUT]])) + " expected."
+                    str(len([sig for sig in signature if sig[2] in [IN, INOUT]])) + " expected."
 
                 argtypes = []
-                effectiveArgs = []
-                additionalArgs = []
-                additionalArgtypes = []
-                resultArgs = []
-                iargIN = 0
-                for s in signature:
-                    if s[2] in (IN, INOUT) and sorted_args[iargIN] is MANDATORY_AFTER_OPTIONAL:
-                        raise ValueError("Arguments intiailised with MANDATORY_AFTER_OPTIONAL must be set")
-                    if s[0] == str:
-                        if not isinstance(s[1], tuple):
+                effective_args = []
+                additional_args = []
+                additional_argtypes = []
+                result_args = []
+                iarg_in = 0
+                for sig in signature:
+                    if sig[2] in (IN, INOUT) and sorted_args[iarg_in] is MANDATORY_AFTER_OPTIONAL:
+                        raise ValueError("Arguments intiailised with " + \
+                                         "MANDATORY_AFTER_OPTIONAL must be set")
+                    if sig[0] == str:
+                        if not isinstance(sig[1], tuple):
                             raise ValueError("Signature for string must provide a length")
-                    if s[2] in (IN, INOUT) and sorted_args[iargIN] is MISSING:
-                        iargIN += 1
+                    if sig[2] in (IN, INOUT) and sorted_args[iarg_in] is MISSING:
+                        iarg_in += 1
                         argtypes.append(ctypes.POINTER(ctypes.c_voidp))
-                        effectiveArgs.append(None)
-                        if s[2] == INOUT:
-                            resultArgs.append(None)
-                    elif s[2] == OUT and s[0] is MISSING:
+                        effective_args.append(None)
+                        if sig[2] == INOUT:
+                            result_args.append(None)
+                    elif sig[2] == OUT and sig[0] is MISSING:
                         argtypes.append(ctypes.POINTER(ctypes.c_voidp))
-                        effectiveArgs.append(None)
-                        resultArgs.append(None)
-                    elif s[0] == str and len(s[1]) == 1:
+                        effective_args.append(None)
+                        result_args.append(None)
+                    elif sig[0] == str and len(sig[1]) == 1:
                         argtypes.append(ctypes.c_char_p)
-                        if s[2] in [IN, INOUT]:
-                            argument = sorted_args[iargIN].encode("utf-8")
-                            iargIN += 1
-                            if len(argument) > s[1][0]:
-                                raise ValueError("String is too long (#arg " + str(iargIN) + ")")
-                            argument = ctypes.create_string_buffer(argument.ljust(s[1][0]))
+                        if sig[2] in [IN, INOUT]:
+                            argument = sorted_args[iarg_in].encode("utf-8")
+                            iarg_in += 1
+                            if len(argument) > sig[1][0]:
+                                raise ValueError("String is too long (#arg " + str(iarg_in) + ")")
+                            argument = ctypes.create_string_buffer(argument.ljust(sig[1][0]))
                         else:
-                            argument = ctypes.create_string_buffer(s[1][0])
-                        additionalArgs.append(ctypes.c_longlong(s[1][0]))  # | according to f2py output for gfortran and ifort
-                        additionalArgtypes.append(ctypes.c_longlong)       # | not a pointer, passed by value!
-                        effectiveArgs.append(argument)
-                        if s[2] in [OUT, INOUT]:
-                            resultArgs.append(argument)
+                            argument = ctypes.create_string_buffer(sig[1][0])
+                        # According to f2py output for gfortran and ifort not a pointer,
+                        # passed by value!
+                        additional_args.append(ctypes.c_longlong(sig[1][0]))
+                        additional_argtypes.append(ctypes.c_longlong)
+                        effective_args.append(argument)
+                        if sig[2] in [OUT, INOUT]:
+                            result_args.append(argument)
                     else:
-                        if s[1] is None:
+                        if sig[1] is None:
                             # scalar value
-                            if s[0] == bool:
+                            if sig[0] == bool:
                                 if (true, false) == (1, 0):
                                     cl = ctypes.c_bool
                                 else:
                                     cl = ctypes.c_int8
-                            elif s[0] == numpy.int64:
+                            elif sig[0] == numpy.int64:
                                 cl = ctypes.c_longlong
-                            elif s[0] == numpy.float64:
+                            elif sig[0] == numpy.float64:
                                 cl = ctypes.c_double
-                            elif s[0] == numpy.int32:
+                            elif sig[0] == numpy.int32:
                                 cl = ctypes.c_long
-                            elif s[0] == numpy.float32:
+                            elif sig[0] == numpy.float32:
                                 cl = ctypes.c_float
                             else:
-                                raise NotImplementedError("This scalar type is not (yet?) implemented")
+                                raise NotImplementedError("This scalar type is not yet implemented")
                             argtypes.append(ctypes.POINTER(cl))
-                            if s[2] in [IN, INOUT]:
-                                argument = cl(s[0](sorted_args[iargIN]) if castInput else sorted_args[iargIN])
-                                iargIN += 1
+                            if sig[2] in [IN, INOUT]:
+                                argument = sorted_args[iarg_in]
+                                if castInput:
+                                    argument = sig[0](argument)
+                                argument = cl(argument)
+                                iarg_in += 1
                             else:
                                 argument = cl()
-                            effectiveArgs.append(ctypes.byref(argument))
-                            if s[2] in [OUT, INOUT]:
-                                resultArgs.append(argument)
+                            effective_args.append(ctypes.byref(argument))
+                            if sig[2] in [OUT, INOUT]:
+                                result_args.append(argument)
                         else:
                             # Arrays
-                            if s[0] == str:
-                                expected_dtype = numpy.dtype(('S', s[1][0]))
+                            if sig[0] == str:
+                                expected_dtype = numpy.dtype(('S', sig[1][0]))
                                 effective_dtype = expected_dtype
-                                expected_shape = s[1][1:]
+                                expected_shape = sig[1][1:]
                             else:
-                                if s[0] == bool and (true, false) != (1, 0):
-                                    expected_dtype = s[0]
+                                if sig[0] == bool and (true, false) != (1, 0):
+                                    expected_dtype = sig[0]
                                     effective_dtype = numpy.int8
                                 else:
-                                    expected_dtype = s[0]
+                                    expected_dtype = sig[0]
                                     effective_dtype = expected_dtype
-                                expected_shape = s[1]
-                            if s[2] in [IN, INOUT]:
-                                argument = sorted_args[iargIN].astype(effective_dtype) if castInput else sorted_args[iargIN]
-                                iargIN += 1
+                                expected_shape = sig[1]
+                            if sig[2] in [IN, INOUT]:
+                                argument = sorted_args[iarg_in]
+                                if castInput:
+                                    argument = argument.astype(effective_dtype)
+                                iarg_in += 1
                                 if not isinstance(argument, numpy.ndarray):
-                                    raise ValueError("Arrays must be numpy.ndarrays (argument #{i})".format(i=iargIN - 1))
+                                    raise ValueError("Arrays must be numpy.ndarrays " +
+                                                     "(argument #" + str(iarg_in - 1) + ")")
                                 if argument.dtype != expected_dtype:
-                                    raise ValueError("Wrong dtype for #arg " + str(iargIN - 1))
+                                    raise ValueError("Wrong dtype for #arg " + str(iarg_in - 1))
                                 if len(expected_shape) != len(argument.shape):
-                                    raise ValueError("Wrong rank for input array (#arg " + str(iargIN - 1) + ")")
+                                    raise ValueError("Wrong rank for input array (#arg " +
+                                                     str(iarg_in - 1) + ")")
                                 if expected_shape != argument.shape:
                                     raise ValueError("Wrong shape for input array (#arg " +
-                                                     str(iargIN - 1) + "), get " + str(argument.shape) +
+                                                     str(iarg_in - 1) + "), get " +
+                                                     str(argument.shape) +
                                                      ", expected " + str(expected_shape))
-                                if s[0] == str:
-                                    argument = numpy.core.defchararray.ljust(argument, s[1][0])
-                                if s[0] == bool and (true, false) != (1, 0):
-                                    arr = numpy.empty_like(argument, dtype=numpy.int8, order=indexing)
+                                if sig[0] == str:
+                                    argument = numpy.core.defchararray.ljust(argument, sig[1][0])
+                                if sig[0] == bool and (true, false) != (1, 0):
+                                    arr = numpy.empty_like(argument, dtype=numpy.int8,
+                                                           order=indexing)
                                     arr[argument is True] = true
                                     arr[argument is False] = false
                                     argument = arr
@@ -648,19 +673,22 @@ def ctypesForFortranFactory(solib):
                                 elif indexing == 'C' and not argument.flags['C_CONTIGUOUS']:
                                     argument = numpy.ascontiguousarray(argument)
                             else:
-                                argument = numpy.ndarray(expected_shape, dtype=effective_dtype, order=indexing)
-                                if indexing == 'F' and s[0] == str:
-                                    argument = numpy.asfortranarray(numpy.core.defchararray.ljust(argument, s[1][0]))
+                                argument = numpy.ndarray(expected_shape, dtype=effective_dtype,
+                                                         order=indexing)
+                                if indexing == 'F' and sig[0] == str:
+                                    argument = numpy.core.defchararray.ljust(argument, sig[1][0])
+                                    argument = numpy.asfortranarray(argument)
                             contiguity = 'F_CONTIGUOUS' if indexing == 'F' else 'C_CONTIGUOUS'
-                            contiguity = str(contiguity) # Note: str() needed in Python2 for unicode/str obscure incompatibility
+                            contiguity = str(contiguity) # Note: str() needed in Python2 for
+                                                         # unicode/str obscure incompatibility
                             argtypes.append(numpy.ctypeslib.ndpointer(dtype=effective_dtype,
                                                                       ndim=len(argument.shape),
                                                                       flags=contiguity))
-                            effectiveArgs.append(argument)
-                            if s[2] in [OUT, INOUT]:
-                                resultArgs.append(argument)
-                f = my_solib.__getitem__(prefix + func.__name__ + suffix)
-                f.argtypes = argtypes + additionalArgtypes
+                            effective_args.append(argument)
+                            if sig[2] in [OUT, INOUT]:
+                                result_args.append(argument)
+                sub = my_solib.__getitem__(prefix + func.__name__ + suffix)
+                sub.argtypes = argtypes + additional_argtypes
                 if ret is not None:
                     assert len(ret) == 2, "returned value must be described by a two-values tuple"
                     if ret[1] is None or (ret[0] == str and len(ret[1]) == 1):
@@ -679,39 +707,39 @@ def ctypesForFortranFactory(solib):
                             cl = ctypes.c_float
                         elif ret[0] == str:
                             cl = ctypes.c_char_p
-                            raise NotImplementedError("Functions with string as output value are not working")
+                            raise NotImplementedError("Functions with string as output " + \
+                                                      "value are not working")
                         else:
                             raise NotImplementedError("This scalar type is not (yet?) implemented")
                         argument = cl
                     else:
                         raise NotImplementedError("Functions with arrays as output are not working")
-                        """
-                        assert isinstance(ret[1], tuple), \
-                            "if second element of returned value signature is not None, it must be a tuple"
-                        if ret[0] == str:
-                            dtype = numpy.dtype(('S', ret[1][0]))
-                            ctype = ctypes.c_char_p
-                            shape = ret[1][1:]
-                        elif ret[0] == bool and (true, false) != (1, 0):
-                            dtype = numpy.int8
-                            ctype = ctypes.c_int8
-                            shape = ret[1]
-                        else:
-                            dtype = ret[0]
-                            shape = ret[1]
-                            if ret[0] == numpy.int64:
-                                ctype = ctypes.c_longlong
-                            elif ret[0] == numpy.float64:
-                                ctype = ctypes.c_double
-                        result = numpy.ndarray(shape=shape, dtype=dtype)
-                        argument = result.ctypes.data_as(ctypes.POINTER(ctype))
-                        argument = ctypes.POINTER(ctype)
-                        argument = numpy.ctypeslib.ndpointer(dtype=dtype, shape=shape)
-                        """
+                        #assert isinstance(ret[1], tuple), \
+                        #    "if second element of returned value " + \
+                        #    "signature is not None, it must be a tuple"
+                        #if ret[0] == str:
+                        #    dtype = numpy.dtype(('S', ret[1][0]))
+                        #    ctype = ctypes.c_char_p
+                        #    shape = ret[1][1:]
+                        #elif ret[0] == bool and (true, false) != (1, 0):
+                        #    dtype = numpy.int8
+                        #    ctype = ctypes.c_int8
+                        #    shape = ret[1]
+                        #else:
+                        #    dtype = ret[0]
+                        #    shape = ret[1]
+                        #    if ret[0] == numpy.int64:
+                        #        ctype = ctypes.c_longlong
+                        #    elif ret[0] == numpy.float64:
+                        #        ctype = ctypes.c_double
+                        #result = numpy.ndarray(shape=shape, dtype=dtype)
+                        #argument = result.ctypes.data_as(ctypes.POINTER(ctype))
+                        #argument = ctypes.POINTER(ctype)
+                        #argument = numpy.ctypeslib.ndpointer(dtype=dtype, shape=shape)
 
-                    f.restype = argument
+                    sub.restype = argument
 
-                val = f(*(effectiveArgs + additionalArgs))
+                val = sub(*(effective_args + additional_args))
 
                 if ret is not None:
                     if ret[0] == bool and (true, false) != (1, 0):
@@ -720,36 +748,36 @@ def ctypesForFortranFactory(solib):
                         result = [val]
                 else:
                     result = []
-                iargOUT = 0
-                for s in signature:
-                    if s[2] in [OUT, INOUT]:
-                        argument = resultArgs[iargOUT]
-                        iargOUT += 1
+                iarg_out = 0
+                for sig in signature:
+                    if sig[2] in [OUT, INOUT]:
+                        argument = result_args[iarg_out]
+                        iarg_out += 1
                         if argument is not None: #missing optional argument
-                            if s[0] == str and len(s[1]) == 1:
+                            if sig[0] == str and len(sig[1]) == 1:
                                 argument = argument.value.decode('utf-8')
-                            else:
-                                if s[1] is None:
-                                    # scalar
-                                    if s[0] == bool and (true, false) != (1, 0):
-                                        argument = argument.value == true
-                                    else:
-                                        argument = argument.value
+                            elif sig[1] is None:
+                                # scalar
+                                if sig[0] == bool and (true, false) != (1, 0):
+                                    argument = argument.value == true
                                 else:
-                                    # array
-                                    if s[0] == bool and (true, false) != (1, 0):
-                                        argument = argument == true
-                                    pass  # If needed, we could reverse contiguity here (we then would need to track those changes)
+                                    argument = argument.value
+                            else:
+                                # array
+                                if sig[0] == bool and (true, false) != (1, 0):
+                                    argument = argument == true
+                                # If needed, we could reverse contiguity here
+                                # (we then would need to track those changes)
                             result.append(argument)
                 if len(result) > 1:
                     return tuple(result)
-                elif len(result) == 1:
+                if len(result) == 1:
                     return result[0]
             wrapper.__name__ = func.__name__
             wrapper.__doc__ = func.__doc__
             return wrapper
         return decorator
-    return ctypesFF, my_solib._handle
+    return ctypesFF, my_solib._handle # pylint: disable=protected-access
 
 
 def fortran2signature(filename=None, fortran_code=None, as_string=True,
@@ -758,7 +786,8 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
     """
     This functions returns the signature as a string (if as_string) or as a python object.
     In this later case, in variables must be put in **kwargs.
-    The default kind (specified by compilation options) can be provided for real, logical and integer.
+    The default kind (specified by compilation options) can be provided for real,
+    logical and integer.
     prefix and suffix are used to build the symbol name to use in the shared lib (use %s in
     these strings as a placeholder for the module name)
 
@@ -774,13 +803,14 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
     there are certainly issues with real fortran code.
 
     Example: the command line
-    ctypesForFortran.py --solib=./foo.so --suffix="_" --kind_real 8 --kind_integer 8 --kind_logical 1 foo.F90
+    ctypesForFortran.py --solib=./foo.so --suffix="_" --kind_real 8 \
+                        --kind_integer 8 --kind_logical 1 foo.F90
     outputs a python script that may be used in place of the signature part of the python code
-    given as example in the ctypesForFortranFactory function (except that, in the example, order of argument for
-    foo subroutine have been changed).
+    given as example in the ctypesForFortranFactory function (except that, in the example,
+    order of argument for foo subroutine have been changed).
 
-    Alternatively, the signature part of the same example (given in the ctypesForFortranFactory function) can
-    be replaced by something like:
+    Alternatively, the signature part of the same example (given in the ctypesForFortranFactory
+    function) can be replaced by something like:
     with open('foo.F90', 'r') as f:
         fortran = f.read()
 
@@ -822,11 +852,12 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                                                   LAIN=LAIN, LAINOUT=LAINOUT,
                                                   KAIN2=KAIN2)
     """
-    import re
-
-    assert filename is not None or fortran_code is not None, "one of filename or fortran_code must be provided"
-    assert not (filename is not None and fortran_code is not None), "one of filename or fortran_code must be None"
-    assert len(kwargs) == len(set([k.lower() for k in kwargs])), "fortran variables are case-insensitive"
+    assert filename is not None or fortran_code is not None, \
+           "one of filename or fortran_code must be provided"
+    assert not (filename is not None and fortran_code is not None), \
+           "one of filename or fortran_code must be None"
+    assert len(kwargs) == len({k.lower() for k in kwargs}), \
+           "fortran variables are case-insensitive"
     assert as_string is False or solib is not None, "solib is required if as_string"
     assert as_string or only is not None, "only must be specified when as_string is False"
 
@@ -845,26 +876,26 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
             line = lines_tmp.pop(0).strip()
             ind = 0
         # Look for first (if any) interesting character among ', ", #, &
-        se = re.search('\'|"|&|!|;', line[ind:])
-        if se is None:
+        sep = re.search('\'|"|&|!|;', line[ind:])
+        if sep is None:
             if line.strip() != "":
                 lines.append(line.strip())
             line = ''
         else:
-            c = se.group()
-            if c == '!' and not in_str:
+            char = sep.group()
+            if char == '!' and not in_str:
                 lines.append(line.strip())
                 line = ''
-            elif c == '&':
-                if in_str and line[ind + line[ind:].find(c) - 1] == '\\':
+            elif char == '&':
+                if in_str and line[ind + line[ind:].find(char) - 1] == '\\':
                     # do not count
-                    ind = ind + line[ind:].find(c) + 1
+                    ind = ind + line[ind:].find(char) + 1
                 else:
                     # not in str or true continuation character
-                    after = line[(ind + line[ind:].find(c) + 1):].strip()
+                    after = line[(ind + line[ind:].find(char) + 1):].strip()
                     if not (after == "" or after[0] == "!"):
                         raise RuntimeError("& followed by something")
-                    line = line[:ind + line[ind:].find(c)].strip()
+                    line = line[:ind + line[ind:].find(char)].strip()
                     nextline = lines_tmp.pop(0).strip()
                     if not in_str:
                         line += " "
@@ -872,29 +903,30 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                         line += nextline[nextline.find('&') + 1:]
                     else:
                         line += nextline
-            elif c == ';' and not in_str:
-                lines.append(line[:ind + line[ind:].find(c)].strip())
-                line = line[ind + line[ind:].find(c) + 1:]
+            elif char == ';' and not in_str:
+                lines.append(line[:ind + line[ind:].find(char)].strip())
+                line = line[ind + line[ind:].find(char) + 1:]
                 ind = 0
-            elif c in ['"', "'"]:
+            elif char in ['"', "'"]:
                 if not in_str:
                     # Beginning of string
-                    ind = ind + line[ind:].find(c) + 1
-                    in_str = c
+                    ind = ind + line[ind:].find(char) + 1
+                    in_str = char
                 else:
-                    if c != in_str:
+                    if char != in_str:
                         # quote or double quote in string
-                        ind = ind + line[ind:].find(c) + 1
+                        ind = ind + line[ind:].find(char) + 1
+                    elif line[ind + line[ind:].find(char) - 1] == '\\':
+                        # not the end of string
+                        ind = ind + line[ind:].find(char) + 1
                     else:
-                        if line[ind + line[ind:].find(c) - 1] == '\\':
-                            # not the end of string
-                            ind = ind + line[ind:].find(c) + 1
-                        else:
-                            # This is the end of string
-                            ind = ind + line[ind:].find(c) + 1
-                            in_str = False
+                        # This is the end of string
+                        ind = ind + line[ind:].find(char) + 1
+                        in_str = False
 
-    objs = []  # each item is a dict with keys: module, name, in_var_names (list of in var names), signatures (list of signatures), result (result signature)
+    objs = []  # each item is a dict with keys: module, name,
+               # in_var_names (list of in var names), signatures (list of signatures),
+               # result (result signature)
     low_kwargs = {k.lower():v for k, v in kwargs.items()}
     in_module = False
     in_function = False
@@ -919,10 +951,11 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
             path.append(name)
             if len(path) == 1 and only in [None, name]:
                 in_subroutine = name
-                args = [arg.strip().lower() for arg in line[line.find("(") + 1:line.find(")")].split(",")]
+                subargs = [arg.strip().lower()
+                        for arg in line[line.find("(") + 1:line.find(")")].split(",")]
                 current_obj = {'module': in_module if in_module else "",
                                'name': in_subroutine,
-                               'var_names': args,
+                               'var_names': subargs,
                                'signature': {},
                                'result': None,
                                'must_be_in': set(),
@@ -934,10 +967,11 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
             path.append(name)
             if len(path) == 1 and only in [None, name]:
                 in_function = name
-                args = [arg.strip().lower() for arg in line[line.find("(") + 1:line.find(")")].split(",")]
+                subargs = [arg.strip().lower()
+                        for arg in line[line.find("(") + 1:line.find(")")].split(",")]
                 current_obj = {'module': in_module if in_module else "",
                                'name': in_function,
-                               'var_names': args,
+                               'var_names': subargs,
                                'signature': {},
                                'result': None,
                                'must_be_in': set(),
@@ -946,14 +980,15 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                 result_name = line[line.find(")") + 1:].strip()
                 if len(result_name) > 0:
                     if not result_name.startswith("result"):
-                        raise RuntimeError("Something after the function definition which is not the result?")
+                        raise RuntimeError("Something after the function definition " + \
+                                           "which is not the result?")
                     result_name = result_name[result_name.find("(") + 1:result_name.find(")")]
                     current_obj['result_name'] = result_name
                 else:
                     current_obj['result_name'] = in_function
         elif '::' in line and (in_subroutine or in_function) and len(path) == 1:
             end = len(line) if '!' not in line else line.find('!')
-            args = [arg.strip().lower() for arg in line[line.find('::') + 2:end].split(',')]
+            subargs = [arg.strip().lower() for arg in line[line.find('::') + 2:end].split(',')]
             options_tmp = [opt.strip().lower() for opt in line[:line.find('::')].split(',')]
             options = []
             while len(options_tmp) > 0:
@@ -965,8 +1000,9 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
             dtype = None
             shape = None
             intent = None
-            for arg in args:
-                if arg in current_obj['var_names'] + ([current_obj['result_name']] if in_function else []):
+            for arg in subargs:
+                if arg in current_obj['var_names'] + \
+                          ([current_obj['result_name']] if in_function else []):
                     if arg in current_obj['signature']:
                         raise RuntimeError("arg already declared: " + arg)
                     if dtype is None:
@@ -978,23 +1014,24 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                                     shape = "(" if as_string else []
                                 else:
                                     if as_string:
-                                        shape = shape[:-1]
+                                        shape = shape[:-1] # pylint: disable=unsubscriptable-object
                                     else:
                                         shape = list(shape)
-                                dimensions = [item.strip() for item in opt[opt.find('(') + 1:opt.find(')')].split(',')]
-                                for d in dimensions:
-                                    if d in current_obj['var_names']:
-                                        current_obj['must_be_in'].add(d)
+                                dimensions = [item.strip() for item
+                                              in opt[opt.find('(') + 1:opt.find(')')].split(',')]
+                                for dim in dimensions:
+                                    if dim in current_obj['var_names']:
+                                        current_obj['must_be_in'].add(dim)
                                         if not as_string:
-                                            if d not in low_kwargs:
-                                                raise ValueError(d + "must be in kwargs")
-                                            d = low_kwargs[d]
+                                            if dim not in low_kwargs:
+                                                raise ValueError(dim + "must be in kwargs")
+                                            dim = low_kwargs[dim]
                                     else:
-                                        d = int(d)
+                                        dim = int(dim)
                                     if as_string:
-                                        shape += str(d) + ', '
+                                        shape += str(dim) + ', '
                                     else:
-                                        shape.append(d)
+                                        shape.append(dim)
                                 shape = (shape + ")") if as_string else tuple(shape)
                             elif opt.startswith("intent") and opt[6] in [' ', '\t', '(']:
                                 intent = opt[opt.find('(') + 1:opt.find(')')].upper()
@@ -1005,16 +1042,20 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                                 current_obj['intents'][arg] = intent
                             elif opt == 'optional':
                                 raise RuntimeError("optional argument are not allowed")
-                            elif opt.startswith("real") and (len(opt) == 4 or opt[4] in [' ', '\t', '(']):
+                            elif opt.startswith("real") and \
+                                 (len(opt) == 4 or opt[4] in [' ', '\t', '(']):
                                 dtype = "real"
                                 decode_kind = True
-                            elif opt.startswith("integer") and (len(opt) == 7 or opt[7] in [' ', '\t', '(']):
+                            elif opt.startswith("integer") and \
+                                 (len(opt) == 7 or opt[7] in [' ', '\t', '(']):
                                 dtype = "integer"
                                 decode_kind = True
-                            elif opt.startswith("logical") and (len(opt) == 7 or opt[7] in [' ', '\t', '(']):
+                            elif opt.startswith("logical") and \
+                                 (len(opt) == 7 or opt[7] in [' ', '\t', '(']):
                                 dtype = "logical"
                                 decode_kind = True
-                            elif opt.startswith("character") and (len(opt) == 9 or opt[9] in [' ', '\t', '(']):
+                            elif opt.startswith("character") and \
+                                 (len(opt) == 9 or opt[9] in [' ', '\t', '(']):
                                 if as_string:
                                     dtype = "str"
                                 else:
@@ -1043,7 +1084,8 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                                         shape = (length, )
                                 else:
                                     if as_string:
-                                        shape = "(" + str(length) + ", " + shape[1:]
+                                        shape = shape[1:] # pylint: disable=unsubscriptable-object
+                                        shape = "(" + str(length) + ", " + shape
                                     else:
                                         shape = tuple([length] + list(shape))
                             if decode_kind:
@@ -1051,10 +1093,12 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                                 if '(' in opt:
                                     kind = opt[opt.find('(') + 1:opt.find(')')].strip()
                                     if not kind.startswith('kind'):
-                                        raise RuntimeError("kind specification must start with kind")
+                                        raise RuntimeError("kind specification must " + \
+                                                           "start with kind")
                                     kind = kind[4:].strip()
                                     if kind[0] != "=":
-                                        raise RuntimeError("kind specification must start with kind=")
+                                        raise RuntimeError("kind specification must " + \
+                                                           "start with kind=")
                                     kind = kind[1:].strip()
                                     if kind in current_obj['var_names']:
                                         current_obj['must_be_in'].add(kind)
@@ -1076,25 +1120,31 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                                     dtype = "select[('" + dtype + "', " + str(kind) + ")]"
                                 else:
                                     if (dtype, kind) not in select:
-                                        raise NotImplementedError("This kind is not implemented: " + str((dtype, kind)))
+                                        raise NotImplementedError("This kind is not " + \
+                                                                  "implemented: " + \
+                                                                  str((dtype, kind)))
                                     dtype = select[(dtype, kind)]
                         if dtype is None:
-                            raise RuntimeError("declaration of arg " + arg + " does not provide type information")
+                            raise RuntimeError("declaration of arg " + arg + \
+                                               " does not provide type information")
                         if intent is None and arg != current_obj['result_name']:
-                            raise RuntimeError("declaration of arg " + arg + " does not provide intent IN/OUT information")
+                            raise RuntimeError("declaration of arg " + arg + \
+                                               " does not provide intent IN/OUT information")
                     if as_string:
                         if shape is None:
                             shape = "None"
                         if arg == current_obj['result_name']:
                             current_obj['signature'][arg] = "(" + dtype + "," + shape + ")"
                         else:
-                            current_obj['signature'][arg] = "(" + dtype + "," + shape + "," + intent + ")"
+                            current_obj['signature'][arg] = "(" + dtype + "," + shape + \
+                                                            "," + intent + ")"
                     else:
                         if arg == current_obj['result_name']:
                             current_obj['signature'][arg] = (dtype, shape)
                         else:
                             current_obj['signature'][arg] = (dtype, shape, intent)
-        elif len(line.lower().split()) > 1 and line.lower().split()[0:2] in [['end', 'subroutine'], ['end', 'function']]:
+        elif len(line.lower().split()) > 1 and \
+             line.lower().split()[0:2] in [['end', 'subroutine'], ['end', 'function']]:
             if len(path) == 1 and (in_subroutine or in_function):
                 current_obj['in_var_names'] = []
                 current_obj['signatures'] = []
@@ -1111,8 +1161,10 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                     current_obj['result'] = "None"
                 for arg in current_obj['must_be_in']:
                     if arg not in current_obj['in_var_names']:
-                        raise RuntimeError("An argument (" + arg + ") with INTENT(OUT) has been used for kind or dimension")
-                del current_obj['signature'], current_obj['var_names'], current_obj['must_be_in'], current_obj['intents']
+                        raise RuntimeError("An argument (" + arg + ") with INTENT(OUT) " + \
+                                           "has been used for kind or dimension")
+                del current_obj['signature'], current_obj['var_names'], \
+                    current_obj['must_be_in'], current_obj['intents']
                 objs.append(current_obj)
                 in_subroutine = False
                 in_function = False
@@ -1122,13 +1174,19 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
 
     if as_string:
         result = "import numpy\nimport ctypesForFortran\n\n"
-        result += "IN = ctypesForFortran.IN\nOUT = ctypesForFortran.OUT\nINOUT = ctypesForFortran.INOUT\n\n"
-        result += "select = {('real', 2): numpy.float16,\n          ('real', 4): numpy.float32,\n"
-        result += "          ('real', 8): numpy.float64,\n          ('integer', 1): numpy.int8,\n"
-        result += "          ('integer', 2): numpy.int16,\n          ('integer', 4): numpy.int32,\n"
-        result += "          ('integer', 8): numpy.int64,\n          ('logical', 1): bool}\n\n"
+        result += "IN = ctypesForFortran.IN\n"
+        result += "OUT = ctypesForFortran.OUT\n"
+        result += "INOUT = ctypesForFortran.INOUT\n\n"
+        result += "select = {('real', 2): numpy.float16,\n"
+        result += "          ('real', 4): numpy.float32,\n"
+        result += "          ('real', 8): numpy.float64,\n"
+        result += "          ('integer', 1): numpy.int8,\n"
+        result += "          ('integer', 2): numpy.int16,\n"
+        result += "          ('integer', 4): numpy.int32,\n"
+        result += "          ('integer', 8): numpy.int64,\n"
+        result += "          ('logical', 1): bool}\n\n"
         result += "pre_suf = {}\n"
-        for module_name in set([obj['module'] for obj in objs]):
+        for module_name in {obj['module'] for obj in objs}:
             result += "pre_suf['" + module_name + "'] = ('"
             result += ((prefix % module_name) if '%s' in prefix else prefix) + "', '"
             result += ((suffix % module_name) if '%s' in suffix else suffix) + "')\n"
@@ -1157,13 +1215,21 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Simple fortran parser which produce signature")
     parser.add_argument('filename', metavar='filename', type=str, nargs=1,
                         help='file name of the file containing the fortran code to parse')
-    parser.add_argument('--kind_real', type=int, default=None, help='Kind to use for reals when not specified in declaration')
-    parser.add_argument('--kind_integer', type=int, default=None, help='Kind to use for integers when not specified in declaration')
-    parser.add_argument('--kind_logical', type=int, default=None, help='Kind to use for logicals when not specified in declaration')
-    parser.add_argument('--prefix', type=str, default="", help='prefix to add to the python function name to build the symbol name as found in the shared lib')
-    parser.add_argument('--suffix', type=str, default="", help='suffix to add to the python function name to build the symbol name as found in the shared lib')
-    parser.add_argument('--solib', type=str, help='path the shared lib', required=True)
-    options = parser.parse_args()
-    print(fortran2signature(filename=options.filename[0], kind_real=options.kind_real,
-                            kind_logical=options.kind_logical, kind_integer=options.kind_integer,
-                            prefix=options.prefix, suffix=options.suffix, solib=options.solib))
+    parser.add_argument('--kind_real', type=int, default=None,
+                        help='Kind to use for reals when not specified in declaration')
+    parser.add_argument('--kind_integer', type=int, default=None,
+                        help='Kind to use for integers when not specified in declaration')
+    parser.add_argument('--kind_logical', type=int, default=None,
+                        help='Kind to use for logicals when not specified in declaration')
+    parser.add_argument('--prefix', type=str, default="",
+                        help='prefix to add to the python function name to build the symbol ' + \
+                             'name as found in the shared lib')
+    parser.add_argument('--suffix', type=str, default="",
+                        help='suffix to add to the python function name to build the symbol ' + \
+                             'name as found in the shared lib')
+    parser.add_argument('--solib', type=str, required=True,
+                        help='path the shared lib')
+    args = parser.parse_args()
+    print(fortran2signature(filename=args.filename[0], kind_real=args.kind_real,
+                            kind_logical=args.kind_logical, kind_integer=args.kind_integer,
+                            prefix=args.prefix, suffix=args.suffix, solib=args.solib))
