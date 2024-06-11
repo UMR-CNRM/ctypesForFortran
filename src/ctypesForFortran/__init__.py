@@ -119,10 +119,14 @@ def ctypesForFortranFactory(solib):
     This function returns a tuple (function, handle). The handle can be used with dlclose.
 
     The returned function will return a decorator used to call fortran routines or functions
-    contained in <solib> using ctypes. The function can take up to three arguments:
+    contained in <solib> using ctypes. The function can take up to four arguments:
       - prefix and suffix which will be added to the python function name to build the name
-        of the function in the shared library. By default prefix is the empty string whereas suffix is '_'.
+        of the function in the shared library. By default prefix is the empty string whereas
+        suffix is '_'.
       - if castInput is True, input values are cast into the right dtype before being used.
+      - indexing controls the index order. If 'C', indexes are in C order (arrays
+        can be passed directly to and from the FORTRAN routine). If 'F' (default), array index order
+        is the same as in the FORTRAN routine (arrays are automatically transposed).
 
     The actual python function that must be decorated must return the signature of the fortran routine.
     The signature is a tuple. Fisrt element is the actual list of arguments which will be used to call
@@ -135,9 +139,9 @@ def ctypesForFortranFactory(solib):
         With BIND(C) subroutine, type can also be MISSING (only for OUT arguments).
       - shape is - None in case of a scalar value
                  - a tuple which represent the shape of the array
-                 - in case of str, first shape element is the string size,
-                   if other elements are present, variable is a string array whose
-                   shape is given by shape[1:]
+                 - in case of str, first (regardless of the value of 'indexing') shape element
+                   is the string size; if other elements are present, the variable is a string
+                   array whose shape is given by shape[1:]
       - in_out_intent is one of IN, OUT or INOUT constant declared in the module
     The third, and last, element of the signature tuple is None or a tuple representing the
     output value for a function. It is a tuple with (type, shape) as described above but
@@ -314,7 +318,7 @@ def ctypesForFortranFactory(solib):
                         [(bool, None, IN)], #LOGICAL(KIND=1), INTENT(IN) :: LIN
                         (bool, None))
 
-            @ctypesFF()
+            @ctypesFF(indexing='F') # In this example, index order is the same in FORTRAN and python
             def foo(KIN, KINOUT,    # Integer scalars  # Only IN and INOUT variabes.
                     PIN, PINOUT,    # Float scalars    #
                     LIN, LINOUT,    # Logical scalars  # The order can be different than the
@@ -484,7 +488,7 @@ def ctypesForFortranFactory(solib):
     true, false = {'ifort': (-1, 0),
                    'gfortran': (1, 0)}[compiler.pop()]
 
-    def ctypesFF(prefix="", suffix="_", castInput=False):
+    def ctypesFF(prefix="", suffix="_", castInput=False, indexing='F'):
         """
         This function returns the decorator to use.
         prefix (resp. suffix) is the string that we must put before (resp. after)
@@ -494,8 +498,13 @@ def ctypesForFortranFactory(solib):
         If castInput is True, input values are cast into the right dtype before
         being used.
 
+        If indexing is 'C', array indexes are in the C order whereas if it is 'F'
+        (default) indexes are in the same order as in the FORTRAN subroutine.
+
         Please refer to ctypesForFortranFactory for a complete documentation.
         """
+
+        assert indexing in ('F', 'C'), "indexing must be 'F' or 'C'"
 
         def decorator(func):
             """
@@ -630,19 +639,23 @@ def ctypesForFortranFactory(solib):
                                 if s[0] == str:
                                     argument = numpy.core.defchararray.ljust(argument, s[1][0])
                                 if s[0] == bool and (true, false) != (1, 0):
-                                    arr = numpy.empty_like(argument, dtype=numpy.int8, order='F')
+                                    arr = numpy.empty_like(argument, dtype=numpy.int8, order=indexing)
                                     arr[argument is True] = true
                                     arr[argument is False] = false
                                     argument = arr
-                                if not argument.flags['F_CONTIGUOUS']:
+                                if indexing == 'F' and not argument.flags['F_CONTIGUOUS']:
                                     argument = numpy.asfortranarray(argument)
+                                elif indexing == 'C' and not argument.flags['C_CONTIGUOUS']:
+                                    argument = numpy.ascontiguousarray(argument)
                             else:
-                                argument = numpy.ndarray(expected_shape, dtype=effective_dtype, order='F')
-                                if s[0] == str:
+                                argument = numpy.ndarray(expected_shape, dtype=effective_dtype, order=indexing)
+                                if indexing == 'F' and s[0] == str:
                                     argument = numpy.asfortranarray(numpy.core.defchararray.ljust(argument, s[1][0]))
+                            contiguity = 'F_CONTIGUOUS' if indexing == 'F' else 'C_CONTIGUOUS'
+                            contiguity = str(contiguity) # Note: str() needed in Python2 for unicode/str obscure incompatibility
                             argtypes.append(numpy.ctypeslib.ndpointer(dtype=effective_dtype,
                                                                       ndim=len(argument.shape),
-                                                                      flags=str('F_CONTIGUOUS')))  # Note: str() needed in Python2 for unicode/str obscure inner incompatibility
+                                                                      flags=contiguity))
                             effectiveArgs.append(argument)
                             if s[2] in [OUT, INOUT]:
                                 resultArgs.append(argument)
@@ -726,7 +739,7 @@ def ctypesForFortranFactory(solib):
                                     # array
                                     if s[0] == bool and (true, false) != (1, 0):
                                         argument = argument == true
-                                    pass  # If needed, we could reverse F_CONTIGOUS here (we then would need to track those changes)
+                                    pass  # If needed, we could reverse contiguity here (we then would need to track those changes)
                             result.append(argument)
                 if len(result) > 1:
                     return tuple(result)
