@@ -305,7 +305,7 @@ def ctypesForFortranFactory(solib):
             ctypesFF, handle = ctypesForFortran.ctypesForFortranFactory("./foo.so")
 
             #With gfortran, if f_int was inside module 'toto', we would use
-            #@ctypesFF(prefix='__toto_M  OD_', suffix='')
+            #@ctypesFF(prefix='__toto_MOD_', suffix='')
             @ctypesFF()
             def f_int(KIN):
                 return ([KIN],
@@ -437,17 +437,17 @@ def ctypesForFortranFactory(solib):
 
             assert lout == (not lin), "l 1"
             assert linout == (not False), "l 2"
-            assert numpy.all(laout[0:10]==lain[0:10]) and \
+            assert numpy.all(laout[0:10] == lain[0:10]) and \
                    numpy.all(laout[10:20] == (numpy.logical_not(lain[10:20]))) and \
-                   numpy.all(laout[20:30]==lain[20:30]) and \
+                   numpy.all(laout[20:30] == lain[20:30]) and \
                    numpy.all(laout[30:40] == (numpy.logical_not(lain[30:40]))), "l 3"
             assert numpy.all(lainout == numpy.logical_not(numpy.array([True, False,
                                                                        False, False] * 10))), "l 4"
 
-            assert numpy.all(kaout2[0, :]==kain2[0, :]) and \
-                   numpy.all(kaout2[1, :]==-kain2[1, :]) and \
-                   numpy.all(kaout2[2, :]==kain2[2, :]) and \
-                   numpy.all(kaout2[3, :]==-kain2[3, :]), "K 5"
+            assert numpy.all(kaout2[0, :] == kain2[0, :]) and \
+                   numpy.all(kaout2[1, :] == -kain2[1, :]) and \
+                   numpy.all(kaout2[2, :] == kain2[2, :]) and \
+                   numpy.all(kaout2[3, :] == -kain2[3, :]), "K 5"
 
             #Checks
             #Normal order args = [kin, kinout, pin, pinout, lin, linout, cdin, cdinout, cdain,
@@ -490,6 +490,12 @@ def ctypesForFortranFactory(solib):
     else:
         my_solib = solib
         filename = my_solib._name # pylint: disable=protected-access
+
+    # Interoperability between C and FORTRAN is not easy for bool/LOGICAL.
+    # We assume that the false value is always 0 and we test the returned values from FORTRAN
+    # against this zero: 'python value' = 'fortran value' != 0
+    # In the other way, values given to the FORTRAN subroutine are guessed from the
+    # compiler used
     compiler = set()
     libs = get_dynamic_libs(filename)
     for lib in libs.keys():
@@ -602,10 +608,7 @@ def ctypesForFortranFactory(solib):
                         if sig[1] is None:
                             # scalar value
                             if sig[0] == bool:
-                                if (true, false) == (1, 0):
-                                    cl = ctypes.c_bool
-                                else:
-                                    cl = ctypes.c_int8
+                                cl = ctypes.c_int8
                             elif sig[0] == numpy.int64:
                                 cl = ctypes.c_longlong
                             elif sig[0] == numpy.float64:
@@ -618,7 +621,10 @@ def ctypesForFortranFactory(solib):
                                 raise NotImplementedError("This scalar type is not yet implemented")
                             argtypes.append(ctypes.POINTER(cl))
                             if sig[2] in [IN, INOUT]:
-                                argument = sorted_args[iarg_in]
+                                if sig[0] == bool:
+                                    argument = true if sorted_args[iarg_in] else false
+                                else:
+                                    argument = sorted_args[iarg_in]
                                 if castInput:
                                     argument = sig[0](argument)
                                 argument = cl(argument)
@@ -635,7 +641,7 @@ def ctypesForFortranFactory(solib):
                                 effective_dtype = expected_dtype
                                 expected_shape = sig[1][1:]
                             else:
-                                if sig[0] == bool and (true, false) != (1, 0):
+                                if sig[0] == bool:
                                     expected_dtype = sig[0]
                                     effective_dtype = numpy.int8
                                 else:
@@ -662,11 +668,11 @@ def ctypesForFortranFactory(solib):
                                                      ", expected " + str(expected_shape))
                                 if sig[0] == str:
                                     argument = numpy.core.defchararray.ljust(argument, sig[1][0])
-                                if sig[0] == bool and (true, false) != (1, 0):
+                                elif sig[0] == bool:
                                     arr = numpy.empty_like(argument, dtype=numpy.int8,
                                                            order=indexing)
-                                    arr[argument is True] = true
-                                    arr[argument is False] = false
+                                    arr[argument] = true
+                                    arr[numpy.logical_not(argument)] = false
                                     argument = arr
                                 if indexing == 'F' and not argument.flags['F_CONTIGUOUS']:
                                     argument = numpy.asfortranarray(argument)
@@ -693,10 +699,7 @@ def ctypesForFortranFactory(solib):
                     assert len(ret) == 2, "returned value must be described by a two-values tuple"
                     if ret[1] is None or (ret[0] == str and len(ret[1]) == 1):
                         if ret[0] == bool:
-                            if (true, false) == (1, 0):
-                                cl = ctypes.c_bool
-                            else:
-                                cl = ctypes.c_int8
+                            cl = ctypes.c_int8
                         elif ret[0] == numpy.int64:
                             cl = ctypes.c_longlong
                         elif ret[0] == numpy.float64:
@@ -721,7 +724,7 @@ def ctypesForFortranFactory(solib):
                         #    dtype = numpy.dtype(('S', ret[1][0]))
                         #    ctype = ctypes.c_char_p
                         #    shape = ret[1][1:]
-                        #elif ret[0] == bool and (true, false) != (1, 0):
+                        #elif ret[0] == bool:
                         #    dtype = numpy.int8
                         #    ctype = ctypes.c_int8
                         #    shape = ret[1]
@@ -742,8 +745,8 @@ def ctypesForFortranFactory(solib):
                 val = sub(*(effective_args + additional_args))
 
                 if ret is not None:
-                    if ret[0] == bool and (true, false) != (1, 0):
-                        result = [val == true]
+                    if ret[0] == bool:
+                        result = [val != false]
                     else:
                         result = [val]
                 else:
@@ -758,14 +761,14 @@ def ctypesForFortranFactory(solib):
                                 argument = argument.value.decode('utf-8')
                             elif sig[1] is None:
                                 # scalar
-                                if sig[0] == bool and (true, false) != (1, 0):
-                                    argument = argument.value == true
+                                if sig[0] == bool:
+                                    argument = argument.value != false
                                 else:
                                     argument = argument.value
                             else:
                                 # array
-                                if sig[0] == bool and (true, false) != (1, 0):
-                                    argument = argument == true
+                                if sig[0] == bool:
+                                    argument = argument != false
                                 # If needed, we could reverse contiguity here
                                 # (we then would need to track those changes)
                             result.append(argument)
