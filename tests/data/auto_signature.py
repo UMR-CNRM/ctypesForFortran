@@ -20,25 +20,25 @@ pre_suf[''] = ('', '_')
 
 ctypesFF, handle = ctypesForFortran.ctypesForFortranFactory('./foo.so')
 
-@ctypesFF(*pre_suf[''])
+@ctypesFF(*pre_suf[''], indexing='F')
 def f_int(kin):
     return ([kin],
             [(select[('integer', 8)],None,IN)],
             (select[('integer', 8)],None))
 
-@ctypesFF(*pre_suf[''])
+@ctypesFF(*pre_suf[''], indexing='F')
 def f_real(pin):
     return ([pin],
             [(select[('real', 8)],None,IN)],
             (select[('real', 8)],None))
 
-@ctypesFF(*pre_suf[''])
+@ctypesFF(*pre_suf[''], indexing='F')
 def f_bool(lin):
     return ([lin],
             [(select[('logical', 1)],None,IN)],
             (select[('logical', 1)],None))
 
-@ctypesFF(*pre_suf[''])
+@ctypesFF(*pre_suf[''], indexing='F')
 def foo(kin, kinout, kain, kainout, cdin, cdinout, cdain, cdainout, pin, pinout, pain, painout, lin, linout, lain, lainout, kain2):
     return ([kin, kinout, kain, kainout, cdin, cdinout, cdain, cdainout, pin, pinout, pain, painout, lin, linout, lain, lainout, kain2],
             [(select[('integer', 8)],None,IN),

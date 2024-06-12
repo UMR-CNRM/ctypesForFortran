@@ -26,7 +26,7 @@ from _ctypes import dlclose
 
 __all__ = []
 
-__version__ = "1.1.0"
+__version__ = "2.0.0"
 
 __license__ = 'CeCILL-C'
 
@@ -508,7 +508,7 @@ def ctypesForFortranFactory(solib):
     true, false = {'ifort': (-1, 0),
                    'gfortran': (1, 0)}[compiler.pop()]
 
-    def ctypesFF(prefix="", suffix="_", castInput=False, indexing='F'):
+    def ctypesFF(prefix="", suffix="_", castInput=False, indexing='C'):
         """
         This function returns the decorator to use.
         prefix (resp. suffix) is the string that we must put before (resp. after)
@@ -518,8 +518,8 @@ def ctypesForFortranFactory(solib):
         If castInput is True, input values are cast into the right dtype before
         being used.
 
-        If indexing is 'C', array indexes are in the C order whereas if it is 'F'
-        (default) indexes are in the same order as in the FORTRAN subroutine.
+        If indexing is 'C' (default), array indexes are in the C order whereas if it is 'F'
+        indexes are in the same order as in the FORTRAN subroutine.
 
         Please refer to ctypesForFortranFactory for a complete documentation.
         """
@@ -566,8 +566,6 @@ def ctypesForFortranFactory(solib):
 
                 argtypes = []
                 effective_args = []
-                additional_args = []
-                additional_argtypes = []
                 result_args = []
                 iarg_in = 0
                 for sig in signature:
@@ -597,10 +595,6 @@ def ctypesForFortranFactory(solib):
                             argument = ctypes.create_string_buffer(argument.ljust(sig[1][0]))
                         else:
                             argument = ctypes.create_string_buffer(sig[1][0])
-                        # According to f2py output for gfortran and ifort not a pointer,
-                        # passed by value!
-                        additional_args.append(ctypes.c_longlong(sig[1][0]))
-                        additional_argtypes.append(ctypes.c_longlong)
                         effective_args.append(argument)
                         if sig[2] in [OUT, INOUT]:
                             result_args.append(argument)
@@ -694,7 +688,7 @@ def ctypesForFortranFactory(solib):
                             if sig[2] in [OUT, INOUT]:
                                 result_args.append(argument)
                 sub = my_solib.__getitem__(prefix + func.__name__ + suffix)
-                sub.argtypes = argtypes + additional_argtypes
+                sub.argtypes = argtypes
                 if ret is not None:
                     assert len(ret) == 2, "returned value must be described by a two-values tuple"
                     if ret[1] is None or (ret[0] == str and len(ret[1]) == 1):
@@ -742,7 +736,7 @@ def ctypesForFortranFactory(solib):
 
                     sub.restype = argument
 
-                val = sub(*(effective_args + additional_args))
+                val = sub(*effective_args)
 
                 if ret is not None:
                     if ret[0] == bool:
@@ -785,7 +779,7 @@ def ctypesForFortranFactory(solib):
 
 def fortran2signature(filename=None, fortran_code=None, as_string=True,
                       kind_real=None, kind_logical=None, kind_integer=None,
-                      prefix="", suffix="", solib=None, only=None, **kwargs):
+                      prefix="", suffix="", solib=None, only=None, indexing='C', **kwargs):
     """
     This functions returns the signature as a string (if as_string) or as a python object.
     In this later case, in variables must be put in **kwargs.
@@ -804,6 +798,9 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
 
     Function was tested only against fortran code with relatively simple formatting,
     there are certainly issues with real fortran code.
+
+    With indexing='C' (default) the index order of python arrays is the reverse of the
+    index order of FORTRAN arrays. Index order is the same if indexing=='F'.
 
     Example: the command line
     ctypesForFortran.py --solib=./foo.so --suffix="_" --kind_real 8 \
@@ -1001,7 +998,7 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                         opt += ", " + options_tmp.pop(0)
                 options.append(opt)
             dtype = None
-            shape = None
+            shape = []
             intent = None
             for arg in subargs:
                 if arg in current_obj['var_names'] + \
@@ -1013,13 +1010,7 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                         for opt in options:
                             decode_kind = False
                             if opt.startswith("dimension") and opt[9] in [' ', '\t', '(']:
-                                if shape is None:
-                                    shape = "(" if as_string else []
-                                else:
-                                    if as_string:
-                                        shape = shape[:-1] # pylint: disable=unsubscriptable-object
-                                    else:
-                                        shape = list(shape)
+                                dimshape = []
                                 dimensions = [item.strip() for item
                                               in opt[opt.find('(') + 1:opt.find(')')].split(',')]
                                 for dim in dimensions:
@@ -1031,11 +1022,8 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                                             dim = low_kwargs[dim]
                                     else:
                                         dim = int(dim)
-                                    if as_string:
-                                        shape += str(dim) + ', '
-                                    else:
-                                        shape.append(dim)
-                                shape = (shape + ")") if as_string else tuple(shape)
+                                    dimshape.append(str(dim) if as_string else dim)
+                                shape = shape + (dimshape if indexing == 'F' else dimshape[::-1])
                             elif opt.startswith("intent") and opt[6] in [' ', '\t', '(']:
                                 intent = opt[opt.find('(') + 1:opt.find(')')].upper()
                                 if intent not in ['IN', 'OUT', 'INOUT']:
@@ -1080,17 +1068,7 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                                         length = low_kwargs[length]
                                 else:
                                     length = int(length)
-                                if shape is None:
-                                    if as_string:
-                                        shape = "(" + str(length) + ", )"
-                                    else:
-                                        shape = (length, )
-                                else:
-                                    if as_string:
-                                        shape = shape[1:] # pylint: disable=unsubscriptable-object
-                                        shape = "(" + str(length) + ", " + shape
-                                    else:
-                                        shape = tuple([length] + list(shape))
+                                shape = [str(length) if as_string else length] + shape
                             if decode_kind:
                                 kind = None
                                 if '(' in opt:
@@ -1134,14 +1112,17 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                             raise RuntimeError("declaration of arg " + arg + \
                                                " does not provide intent IN/OUT information")
                     if as_string:
-                        if shape is None:
+                        if len(shape) == 0:
                             shape = "None"
+                        else:
+                            shape = '(' + ', '.join(shape) + ', )'
                         if arg == current_obj['result_name']:
                             current_obj['signature'][arg] = "(" + dtype + "," + shape + ")"
                         else:
                             current_obj['signature'][arg] = "(" + dtype + "," + shape + \
                                                             "," + intent + ")"
                     else:
+                        shape = tuple(shape)
                         if arg == current_obj['result_name']:
                             current_obj['signature'][arg] = (dtype, shape)
                         else:
@@ -1196,7 +1177,7 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
         result += "\n\n"
         result += "ctypesFF, handle = ctypesForFortran.ctypesForFortranFactory('" + solib + "')\n\n"
         for obj in objs:
-            result += "@ctypesFF(*pre_suf['" + obj['module'] + "'])\n"
+            result += "@ctypesFF(*pre_suf['" + obj['module'] + "'], indexing='" + indexing + "')\n"
             result += "def " + obj['name'] + "(" + ', '.join(obj['in_var_names']) + "):\n"
             result += "    return ([" + ', '.join(obj['in_var_names']) + "],\n"
             result += "            [" + ',\n             '.join(obj['signatures']) + "],\n"
@@ -1230,9 +1211,12 @@ if __name__ == '__main__':
     parser.add_argument('--suffix', type=str, default="",
                         help='suffix to add to the python function name to build the symbol ' + \
                              'name as found in the shared lib')
+    parser.add_argument('--Findexing', default=False, action='store_true',
+                        help='Use FORTRAN indexing instead of C indexing')
     parser.add_argument('--solib', type=str, required=True,
                         help='path the shared lib')
     args = parser.parse_args()
     print(fortran2signature(filename=args.filename[0], kind_real=args.kind_real,
                             kind_logical=args.kind_logical, kind_integer=args.kind_integer,
-                            prefix=args.prefix, suffix=args.suffix, solib=args.solib))
+                            prefix=args.prefix, suffix=args.suffix, solib=args.solib,
+                            indexing='F' if args.Findexing else 'C'))
