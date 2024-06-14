@@ -26,7 +26,7 @@ from _ctypes import dlclose
 
 __all__ = []
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 __license__ = 'CeCILL-C'
 
@@ -551,7 +551,7 @@ def ctypesForFortranFactory(solib):
                     "second element of argument signature must be None or a tuple"
                 assert all(len(sig[1]) > 0 for sig in signature if isinstance(sig[1], tuple)), \
                     "if second element of argument is a tuple, it must not be empty"
-                assert all(all((isinstance(item, (int, numpy.int, numpy.int64)) and
+                assert all(all((isinstance(item, (int, numpy.int64)) and
                                 item >= 0) for item in sig[1])
                             for sig in signature if isinstance(sig[1], tuple)), \
                     "if second element of argument is a tuple, it must contain " + \
@@ -651,7 +651,7 @@ def ctypesForFortranFactory(solib):
                             if sig[2] in [IN, INOUT]:
                                 argument = sorted_args[iarg_in]
                                 if castInput:
-                                    argument = argument.astype(effective_dtype)
+                                    argument = argument.astype(expected_dtype)
                                 iarg_in += 1
                                 if not isinstance(argument, numpy.ndarray):
                                     raise ValueError("Arrays must be numpy.ndarrays " +
