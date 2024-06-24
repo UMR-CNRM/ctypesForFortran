@@ -89,7 +89,7 @@ def get_dynamic_libs(obj):
     libs = {}
     osname = str(os.uname()[0])
     if osname == 'Linux':
-        _re = re.compile(r'((?P<libname>lib.*) => )?(?P<libpath>/.*/.*\.so(\.\d+)?)\s\(0x.*\)')
+        _re = re.compile(r'((?P<libname>lib.*) => )?(?P<libpath>/.*/.*\.so(\.\d+)*)\s\(0x.*\)')
         with subprocess.Popen(['ldd', obj], stdout=subprocess.PIPE,
                                             stderr=subprocess.PIPE) as proc:
             ldd_out = [line.decode().strip() for line in proc.stdout.readlines()]
