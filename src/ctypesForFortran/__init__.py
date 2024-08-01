@@ -425,10 +425,10 @@ def ctypesForFortranFactory(solib):
 
             assert cdout == (cdin.ljust(10) + "Foo").ljust(20), "cd 1"
             assert cdinout == "azertyuiop".ljust(20)[0:5] + "azertyuiop".ljust(20)[0:15], "cd 2"
-            assert numpy.all(cdaout[0, :] == numpy.core.defchararray.ljust(cdain, 10)[1, ::-1]) and \
-                   numpy.all(cdaout[1, :] == numpy.core.defchararray.ljust(cdain, 10)[0, ::-1]), "cd 3"
-            assert numpy.all(cdainout[0, :] == numpy.core.defchararray.ljust(cdainout, 10)[1, :]) and \
-                   numpy.all(cdainout[1, :] == numpy.core.defchararray.ljust(cdainout, 10)[0, :]), "cd 4"
+            assert numpy.all(cdaout[0, :] == numpy.char.ljust(cdain, 10)[1, ::-1]) and \
+                   numpy.all(cdaout[1, :] == numpy.char.ljust(cdain, 10)[0, ::-1]), "cd 3"
+            assert numpy.all(cdainout[0, :] == numpy.char.ljust(cdainout, 10)[1, :]) and \
+                   numpy.all(cdainout[1, :] == numpy.char.ljust(cdainout, 10)[0, :]), "cd 4"
 
             assert pout == pin + 1., "p 1"
             assert pinout == 53. + 1., "p 2"
@@ -661,7 +661,7 @@ def ctypesForFortranFactory(solib):
                                                      str(argument.shape) +
                                                      ", expected " + str(expected_shape))
                                 if sig[0] == str:
-                                    argument = numpy.core.defchararray.ljust(argument, sig[1][0])
+                                    argument = numpy.char.ljust(argument, sig[1][0])
                                 elif sig[0] == bool:
                                     arr = numpy.empty_like(argument, dtype=numpy.int8,
                                                            order=indexing)
@@ -676,7 +676,7 @@ def ctypesForFortranFactory(solib):
                                 argument = numpy.ndarray(expected_shape, dtype=effective_dtype,
                                                          order=indexing)
                                 if indexing == 'F' and sig[0] == str:
-                                    argument = numpy.core.defchararray.ljust(argument, sig[1][0])
+                                    argument = numpy.char.ljust(argument, sig[1][0])
                                     argument = numpy.asfortranarray(argument)
                             contiguity = 'F_CONTIGUOUS' if indexing == 'F' else 'C_CONTIGUOUS'
                             contiguity = str(contiguity) # Note: str() needed in Python2 for
