@@ -11,22 +11,18 @@ See these function documentations for more help on them.
 
 The module also exposes a dlclose function to try closing lib
 """
-
-from __future__ import print_function, absolute_import, unicode_literals, division
-
 import subprocess
 import os
 import re
 import ctypes
 from functools import wraps
-import six
 import numpy
 
 from _ctypes import dlclose
 
 __all__ = []
 
-__version__ = "1.1.3"
+__version__ = "1.1.4"
 
 __license__ = 'CeCILL-C'
 
@@ -484,7 +480,7 @@ def ctypesForFortranFactory(solib):
 >>END PYTHON
           if OK must execute without any output
     """
-    if isinstance(solib, six.string_types):
+    if isinstance(solib, str):
         filename = solib
         my_solib = ctypes.CDLL(solib, ctypes.RTLD_GLOBAL)
     else:
