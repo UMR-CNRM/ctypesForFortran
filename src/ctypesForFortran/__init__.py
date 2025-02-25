@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (c) Météo France (2014-)
-# This software is governed by the CeCILL-C license under French law.
-# http://www.cecill.info
-
+#
+#   Copyright 2014 Meteo France
+#
+#   Licensed under the Apache License, Version 2.0 (the "License");
+#   you may not use this file except in compliance with the License.
+#   You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+#   Unless required by applicable law or agreed to in writing, software
+#   distributed under the License is distributed on an "AS IS" BASIS,
+#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#   See the License for the specific language governing permissions and
+#   limitations under the License.
 """
 This module provides a function (ctypesForFortranFactory) which return a decorator
 and another function (fortran2signature) which helps at building signature.
@@ -28,7 +38,7 @@ __all__ = []
 
 __version__ = "2.0.1"
 
-__license__ = 'CeCILL-C'
+__license__ = 'Apache-2.0'
 
 __authors__ = ['Sébastien Riette']
 

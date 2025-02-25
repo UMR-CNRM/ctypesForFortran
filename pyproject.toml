@@ -13,7 +13,7 @@ maintainers = [
   { name = "Sébastien Riette"  , email = "sebastien.riette@meteo.fr"}
 ]
 
-license = {file = "LICENSE.txt"}
+license = {file = "LICENSE"}
 
 classifiers = [
     'Development Status :: 5 - Production/Stable',
