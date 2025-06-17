@@ -69,4 +69,11 @@ def foo(kin, kinout, kain, kainout, cdin, cdinout, cdain, cdainout, pin, pinout,
              (select[('integer', 8)],(4, 5, ),OUT)],
             None)
 
+@ctypesFF(*pre_suf[''])
+def convert(carrayin):
+    return ([carrayin],
+            [(str,(1, 10, ),IN),
+             (str,(1, 12, ),OUT)],
+            None)
+
 
