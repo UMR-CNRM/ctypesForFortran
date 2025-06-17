@@ -36,7 +36,7 @@ from _ctypes import dlclose
 
 __all__ = []
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 __license__ = 'Apache-2.0'
 
@@ -94,6 +94,73 @@ def treatReturnCode(func):
     return wrapper
 
 
+def string2array(s, length=None):
+    """
+    Portability is better with character arrays than with character strings
+    This function makes the conversion string to array
+    """
+    if isinstance(s, str):
+        if length is not None:
+            s = s.ljust(length)
+        return numpy.array([c for c in s], dtype='S1')
+    else:
+        if length is not None:
+            strlen = length
+        else:
+            strlen = max(len(ones) for ones in s)
+        return numpy.array([[c for c in ones.ljust(strlen)] for ones in  s], dtype='S1')
+
+
+def array2string(pos, decode=True):
+    """
+    Portability is better with character arrays than with character strings
+    This function is a decorator builder to make the conversion array to string
+    :param pos: position or list of positions of returned values
+                that must be converted from array to string
+    :param decode: - True to decode all strings and string arrays into utf-8
+                   - False to not decode them
+                   - position or list of positions of returned values to decode
+    """
+    if not isinstance(pos, list):
+        pos = [pos]
+    if decode is True:
+        decode = pos
+    elif decode is False:
+        decode = []
+    elif not isinstance(decode, list):
+        decode = [decode]
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            result = func(*args, **kwargs)
+            if isinstance(result, (tuple, list)):
+                nout = len(result)
+                result = list(result)
+            else:
+                nout = 1
+                result = [result]
+            for p in pos:
+                if len(result[p].shape) == 1:
+                    result[p] = b''.join(result[p])
+                    if p in decode:
+                        result[p] = result[p].decode('utf-8')
+                else:
+                    result[p] = numpy.array([b''.join(result[p][i]).rstrip()
+                                          for i in range(result[p].shape[0])])
+                    if p in decode:
+                        result[p] = numpy.array([s.decode('utf-8') for s in result[p]])
+            if nout == 1:
+                result = result[0]
+            else:
+                result = tuple(result)
+            return result
+        wrapper.__name__ = func.__name__
+        wrapper.__doc__ = func.__doc__
+        return wrapper
+    return decorator
+
+
 def get_dynamic_libs(obj):
     """Get dynamic libs from a shared object lib or executable."""
     libs = {}
@@ -122,6 +189,56 @@ def get_dynamic_libs(obj):
     else:
         raise NotImplementedError("OS: " + osname)
     return libs
+
+
+class Logical():
+    """
+    Interoperability between C and FORTRAN is not easy for bool/LOGICAL.
+    We assume that the false value is always 0 and we test the returned values
+    from FORTRAN against this zero: 'python value' = 'fortran value' != 0
+    In the other way, values given to the FORTRAN subroutine are guessed from
+    the compiler used, hoping that the options used haven't changed the default
+    behavior
+
+    This class computes the true/false value to use, only when needed
+    """
+    def __init__(self, filename):
+        self._filename = filename
+        self._true = None
+        self._false = None
+
+    def _compute(self):
+        """
+        Guess the compiler and the true/false values
+        """
+        compiler = set()
+        libs = get_dynamic_libs(self._filename)
+        for lib in libs.keys():
+            if lib.startswith('libgfortran'):
+                compiler.add('gfortran')
+            if lib.startswith('libifport'):
+                compiler.add('ifort')
+            if lib.startswith('libnvf'):
+                compiler.add('nvfortran')
+        if len(compiler) == 0:
+            raise IOError("Don't know which compiler was used to build the shared library")
+        self._true, self._false = {'ifort': (-1, 0),
+                                   'gfortran': (1, 0),
+                                   'nvfortran': (-1, 0),
+                                   'nfort': (1, 0),
+                                  }[compiler.pop()]
+
+    @property
+    def true(self):
+        "Returns the 'true' value used by default by this compiler"
+        if self._true is None:
+            self._compute()
+        return self._true
+
+    @property
+    def false(self):
+        "Returns 0, the 'false' value used by defaults by the different compilers tested"
+        return 0
 
 
 def ctypesForFortranFactory(solib):
@@ -172,6 +289,9 @@ def ctypesForFortranFactory(solib):
     Note on strings: scalars strings are converted from and to unicode; which isn't always wise
                      strings arrays are declared (in signature) with str but must be
                      created with the 'S' dtype with python3 (str is OK with python2)
+
+    Note 2 on strings: compatibility is better with 1-char arrays than with strings
+                       one example below show how to convert strings and arrays
 
     Note on inout arrays: if a subroutine takes array arguments with the INOUT intent, the input
                           array may be, or not, the same object as the returned array. For example,
@@ -296,6 +416,46 @@ def ctypesForFortranFactory(solib):
               KAOUT2(3,:)=KAIN2(3,:)
               KAOUT2(4,:)=-KAIN2(4,:)
             END SUBROUTINE
+
+            !Example with string-array conversion
+            SUBROUTINE CONVERT(CARRAYIN, CARRAYOUT)
+              USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_CHAR
+              IMPLICIT NONE
+              CHARACTER(KIND=C_CHAR), DIMENSION(10), INTENT(IN) :: CARRAYIN
+              CHARACTER(KIND=C_CHAR), DIMENSION(12), INTENT(OUT) :: CARRAYOUT
+              !
+              CHARACTER(LEN=SIZE(CARRAYIN)) :: CSTRINGIN
+              CHARACTER(LEN=SIZE(CARRAYOUT)) :: CSTRINGOUT
+              !
+              CALL ARRAY2STRING(CARRAYIN, CSTRINGIN)
+              CSTRINGOUT='X' // CSTRINGIN // 'Y'
+              CALL STRING2ARRAY(CSTRINGOUT, CARRAYOUT)
+              CONTAINS
+                SUBROUTINE ARRAY2STRING(CARRAY, CSTRING)
+                  USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_CHAR
+                  IMPLICIT NONE
+                  CHARACTER(KIND=C_CHAR), DIMENSION(:), INTENT(IN) :: CARRAY
+                  CHARACTER(LEN=SIZE(CARRAY)), INTENT(OUT) :: CSTRING
+                  !
+                  INTEGER :: JK
+                  !
+                  DO JK=1, SIZE(CARRAY)
+                    CSTRING(JK:JK)=CARRAY(JK)
+                  ENDDO
+                END SUBROUTINE ARRAY2STRING
+                SUBROUTINE STRING2ARRAY(CSTRING, CARRAY)
+                  USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_CHAR
+                  IMPLICIT NONE
+                  CHARACTER(LEN=*), INTENT(IN) :: CSTRING
+                  CHARACTER(KIND=C_CHAR), DIMENSION(LEN(CSTRING)), INTENT(OUT) :: CARRAY
+                  !
+                  INTEGER :: JK
+                  !
+                  DO JK=1, LEN(CSTRING)
+                    CARRAY(JK)=CSTRING(JK:JK)
+                  ENDDO
+                END SUBROUTINE STRING2ARRAY
+            END SUBROUTINE CONVERT
 >>END FORTRAN
           compiled to create foo.so shared library (ex with gfortran:
           "gfortran -c -fPIC foo.F90 && gfortran -shared -g -o foo.so foo.o",
@@ -389,6 +549,14 @@ def ctypesForFortranFactory(solib):
                          (numpy.int64, (4, 5), OUT), #INTEGER(KIND=8), DIMENSION(4, 5), INTENT(OUT) :: KAOUT2
                         ],
                         None)
+
+            @ctypesForFortran.array2string(0)
+            @ctypesFF()
+            def convert(carrayin):
+               return ([ctypesForFortran.string2array(carrayin, 10)],
+                       [(str,(1, 10, ),IN),
+                        (str,(1, 12, ),OUT)],
+                       None)
 
             assert f_int(5) == 6, "f_int"
             assert f_real(5.) == 6., "f_real"
@@ -490,6 +658,8 @@ def ctypesForFortranFactory(solib):
                 except:
                     #It is normal for call to raise an error
                     pass
+
+            assert convert('ABC') == 'XABC       Y'
             ctypesForFortran.dlclose(handle)
 >>END PYTHON
           if OK must execute without any output
@@ -499,24 +669,9 @@ def ctypesForFortranFactory(solib):
         my_solib = ctypes.CDLL(solib, ctypes.RTLD_GLOBAL)
     else:
         my_solib = solib
-        filename = my_solib._name # pylint: disable=protected-access
+        filename = my_solib._name  # pylint: disable=protected-access
 
-    # Interoperability between C and FORTRAN is not easy for bool/LOGICAL.
-    # We assume that the false value is always 0 and we test the returned values from FORTRAN
-    # against this zero: 'python value' = 'fortran value' != 0
-    # In the other way, values given to the FORTRAN subroutine are guessed from the
-    # compiler used
-    compiler = set()
-    libs = get_dynamic_libs(filename)
-    for lib in libs.keys():
-        if lib.startswith('libgfortran'):
-            compiler.add('gfortran')
-        if lib.startswith('libifport'):
-            compiler.add('ifort')
-    if len(compiler) == 0:
-        raise IOError("Don't know which compiler was used to build the shared library")
-    true, false = {'ifort': (-1, 0),
-                   'gfortran': (1, 0)}[compiler.pop()]
+    logical = Logical(filename)
 
     def ctypesFF(prefix="", suffix="_", castInput=False, indexing='C'):
         """
@@ -626,7 +781,10 @@ def ctypesForFortranFactory(solib):
                             argtypes.append(ctypes.POINTER(cl))
                             if sig[2] in [IN, INOUT]:
                                 if sig[0] == bool:
-                                    argument = true if sorted_args[iarg_in] else false
+                                    if sorted_args[iarg_in]:
+                                        argument = logical.true
+                                    else:
+                                        argument = logical.false
                                 else:
                                     argument = sorted_args[iarg_in]
                                 if castInput:
@@ -675,8 +833,8 @@ def ctypesForFortranFactory(solib):
                                 elif sig[0] == bool:
                                     arr = numpy.empty_like(argument, dtype=numpy.int8,
                                                            order=indexing)
-                                    arr[argument] = true
-                                    arr[numpy.logical_not(argument)] = false
+                                    arr[argument] = logical.true
+                                    arr[numpy.logical_not(argument)] = logical.false
                                     argument = arr
                                 if indexing == 'F' and not argument.flags['F_CONTIGUOUS']:
                                     argument = numpy.asfortranarray(argument)
@@ -750,7 +908,7 @@ def ctypesForFortranFactory(solib):
 
                 if ret is not None:
                     if ret[0] == bool:
-                        result = [val != false]
+                        result = [val != logical.false]
                     else:
                         result = [val]
                 else:
@@ -760,21 +918,24 @@ def ctypesForFortranFactory(solib):
                     if sig[2] in [OUT, INOUT]:
                         argument = result_args[iarg_out]
                         iarg_out += 1
-                        if argument is not None: #missing optional argument
+                        if argument is not None:  # missing optional argument
                             if sig[0] == str and len(sig[1]) == 1:
                                 argument = argument.value.decode('utf-8')
                             elif sig[1] is None:
                                 # scalar
                                 if sig[0] == bool:
-                                    argument = argument.value != false
+                                    argument = argument.value != logical.false
                                 else:
                                     argument = argument.value
                             else:
                                 # array
                                 if sig[0] == bool:
-                                    argument = argument != false
+                                    argument = argument != logical.false
                                 # If needed, we could reverse contiguity here
                                 # (we then would need to track those changes)
+                            # FIXME The use of repr fixes problems that occur
+                            #       with epygram's testing procedure.
+                            repr(argument)
                             result.append(argument)
                 if len(result) > 1:
                     return tuple(result)
@@ -784,7 +945,7 @@ def ctypesForFortranFactory(solib):
             wrapper.__doc__ = func.__doc__
             return wrapper
         return decorator
-    return ctypesFF, my_solib._handle # pylint: disable=protected-access
+    return ctypesFF, my_solib._handle  # pylint: disable=protected-access
 
 
 def fortran2signature(filename=None, fortran_code=None, as_string=True,
@@ -1061,15 +1222,21 @@ def fortran2signature(filename=None, fortran_code=None, as_string=True,
                                     dtype = "str"
                                 else:
                                     dtype = str
-                                if '(' not in opt:
-                                    raise RuntimeError("character type must provide a length")
-                                length = opt[opt.find('(') + 1:opt.find(')')].strip()
-                                if not length.startswith('len'):
-                                    raise RuntimeError("character length must start with len")
-                                length = length[3:].strip()
-                                if length[0] != '=':
-                                    raise RuntimeError("character legth must start with len=")
-                                length = length[1:]
+                                length = '1'
+                                if '(' in opt:
+                                    for char_opt in opt[opt.find('(') + 1:opt.find(')')
+                                                       ].replace(' ', '').split(','):
+                                        if char_opt.split('=')[0] == 'kind':
+                                            pass
+                                        else:
+                                            if not char_opt.startswith('len'):
+                                                raise RuntimeError(
+                                                    "character length must start with len")
+                                            length = char_opt[3:].strip()
+                                            if length[0] != '=':
+                                                raise RuntimeError(
+                                                    "character length must start with len=")
+                                            length = length[1:]
                                 if length in current_obj['var_names']:
                                     current_obj['must_be_in'].add(length)
                                     if not as_string:
